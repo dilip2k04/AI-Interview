@@ -8,7 +8,7 @@ import User from "../models/User.js";
 export const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: Number(process.env.SMTP_PORT),
-  secure: false, // Brevo uses STARTTLS
+  secure: false,
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
@@ -16,10 +16,10 @@ export const transporter = nodemailer.createTransport({
 });
 
 /* ─────────────────────────────────────────────
-   Verify SMTP Connection (Optional but helpful)
+   Verify SMTP Connection
 ───────────────────────────────────────────── */
 
-transporter.verify(function (error, success) {
+transporter.verify((error) => {
   if (error) {
     console.log("❌ SMTP Connection Error:", error);
   } else {
@@ -49,14 +49,14 @@ export const sendWelcomeMail = async (email, name, company) => {
 AI Interviewer Team</p>
 `;
 
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
       from: `"AI Interviewer" <${process.env.MAIL_FROM}>`,
       to: email,
       subject: "Welcome to AI Interviewer Platform",
       html,
     });
 
-    console.log("✅ Welcome email sent to:", email);
+    console.log("✅ Welcome email sent:", info.messageId);
 
   } catch (error) {
     console.log("❌ Welcome mail error:", error);
@@ -118,14 +118,14 @@ ${company} Recruitment Team
 </p>
 `;
 
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
       from: `"${company}" <${process.env.MAIL_FROM}>`,
       to: candidate.email,
       subject: `Interview Invitation - ${jobRole}`,
       html,
     });
 
-    console.log("✅ Interview email sent to:", candidate.email);
+    console.log("✅ Interview email sent:", info.messageId);
 
   } catch (error) {
     console.log("❌ Interview mail error:", error);
@@ -154,14 +154,14 @@ export const sendJobCreatedMail = async (email, jobRole, company) => {
 <p>AI Interviewer System</p>
 `;
 
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
       from: `"${company}" <${process.env.MAIL_FROM}>`,
       to: email,
       subject: `New Job Created - ${jobRole}`,
       html,
     });
 
-    console.log("✅ Job creation mail sent to:", email);
+    console.log("✅ Job creation mail sent:", info.messageId);
 
   } catch (error) {
     console.log("❌ Job creation mail error:", error);
@@ -175,18 +175,18 @@ export const sendJobCreatedMail = async (email, jobRole, company) => {
 export const sendBatchMails = async (recipients) => {
   try {
 
-    for (const mail of recipients) {
-
-      await transporter.sendMail({
+    const mailPromises = recipients.map((mail) =>
+      transporter.sendMail({
         from: `"AI Interviewer" <${process.env.MAIL_FROM}>`,
         to: mail.to,
         subject: mail.subject,
         html: mail.body,
-      });
+      })
+    );
 
-    }
+    await Promise.all(mailPromises);
 
-    console.log("✅ Bulk emails sent");
+    console.log("✅ Bulk emails sent:", recipients.length);
 
   } catch (error) {
     console.log("❌ Bulk mail error:", error);
