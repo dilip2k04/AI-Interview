@@ -2,12 +2,14 @@ import Project from "../models/Project.js";
 import Interview from "../models/Interview.js";
 import User from "../models/User.js";
 import { generateText, parseGeminiJSON } from "../utils/gemini.js";
-import { sendBatchMails } from "../utils/mailer.js";
+import { sendBatchMails, sendJobCreatedMail } from "../utils/mailer.js";
 
 // ── Create project ────────────────────────────────────────────────────────────
 export async function createProject(req, res, next) {
   try {
+
     const { name, description, jobRole, techStack, deadline, color, company } = req.body;
+
     const project = await Project.create({
       hr: req.user._id,
       name,
@@ -18,8 +20,25 @@ export async function createProject(req, res, next) {
       color: color || "cyan",
       company: company || req.user.company || "",
     });
-    res.status(201).json({ success: true, project });
-  } catch (err) { next(err); }
+
+    /* ─────────────────────────────────────
+       Send project creation email
+    ───────────────────────────────────── */
+
+    sendJobCreatedMail(
+      req.user.email,
+      jobRole,
+      req.user.company
+    ).catch(err => console.log("Project mail failed:", err));
+
+    res.status(201).json({
+      success: true,
+      project
+    });
+
+  } catch (err) {
+    next(err);
+  }
 }
 
 // ── List all projects for this HR (with interview counts) ────────────────────
@@ -181,31 +200,24 @@ Respond ONLY as JSON array:
     );
 
     // sending batch email
-const recipients = candidates.map(candidate => ({
-
-  to: candidate.email,
-
+const recipients = interviews.map((interview, i) => ({
+  to: candidates[i].email,
   subject: `Interview Assigned for ${jobRole}`,
-
   body: `
-  <h2>Hello ${candidate.name},</h2>
+  <h2>Hello ${candidates[i].name}</h2>
 
   <p>You have been assigned an interview.</p>
 
   <p><b>Role:</b> ${jobRole}</p>
   <p><b>Mode:</b> ${mode}</p>
   <p><b>Duration:</b> ${durationMinutes} minutes</p>
-  <p><b>Tech Stack:</b> ${(techStack || []).join(", ")}</p>
 
-  <a href="${process.env.FRONTEND_URL}/interview/${interviewId}"
-style="background:#2563eb;color:white;padding:10px 18px;text-decoration:none;border-radius:6px;">
-Start Interview
-</a>
+  <a href="${process.env.FRONTEND_URL}/interview/${interview._id}"
+  style="background:#2563eb;color:white;padding:10px 18px;text-decoration:none;border-radius:6px;">
+  Start Interview
+  </a>
 
-  <p>Please complete before expiry.</p>
-
-  <br>
-  
+  <br><br>
 
   <p>Best regards,<br>${req.user.company}</p>
   `

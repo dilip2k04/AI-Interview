@@ -4,22 +4,23 @@ import { transporter } from "../utils/mailer.js";
 const router = express.Router();
 
 router.get("/test-mail", async (req, res) => {
-
   try {
 
-    await transporter.sendMail({
-      from: `"AI Interviewer" <sihdilip2023@gmail.com>`, // VERIFIED sender email
+    console.log("Sending test email...");
+
+    const info = await transporter.sendMail({
+      from: `"AI Interviewer" <${process.env.MAIL_FROM}>`,
       to: "gsmddilip1812@gmail.com",
       subject: "Test Email",
-      html: `
-      <h1>Email Working 🚀</h1>
-      <p>Your Brevo SMTP is configured correctly.</p>
-      `
+      html: "<h1>Email Working 🚀</h1>"
     });
+
+    console.log("Mail sent:", info.messageId);
 
     res.json({
       success: true,
-      message: "Mail sent successfully"
+      message: "Mail sent successfully",
+      id: info.messageId
     });
 
   } catch (error) {
@@ -28,11 +29,9 @@ router.get("/test-mail", async (req, res) => {
 
     res.status(500).json({
       success: false,
-      error: "Mail sending failed"
+      error: error.message
     });
-
   }
-
 });
 
 export default router;
