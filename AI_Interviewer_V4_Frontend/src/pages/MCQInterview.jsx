@@ -13,34 +13,41 @@ const TAB_SWITCH_LIMIT = 3;
 
 export default function MCQInterview({ navigate, interviewId }) {
   // ── phase: "permissions" → "ready" → "active" ─────────────────────────
-  const [phase,        setPhase]        = useState("permissions"); // permissions|ready|active
-  const [permGranted,  setPermGranted]  = useState(false);
+  const [phase, setPhase] = useState("permissions"); // permissions | ready | active
+  const [permGranted, setPermGranted] = useState(false);
 
-  const [interview,   setInterview]   = useState(null);
-  const [questions,   setQuestions]   = useState([]);
-  const [current,     setCurrent]     = useState(0);
-  const [answers,     setAnswers]     = useState({});
-  const [timeLeft,    setTimeLeft]    = useState(0);
-  const [submitting,  setSubmitting]  = useState(false);
+  const [interview, setInterview] = useState(null);
+  const [questions, setQuestions] = useState([]);
+  const [current, setCurrent] = useState(0);
+  const [answers, setAnswers] = useState({});
+  const [timeLeft, setTimeLeft] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
   const [loadingPage, setLoadingPage] = useState(true);
-  const [error,       setError]       = useState("");
+  const [error, setError] = useState("");
 
   // ── Tab switch warning toast ───────────────────────────────────────────
-  const [tabWarning, setTabWarning]   = useState(null); // { count, remaining }
-  const warnTimerRef                  = useRef(null);
+  const [tabWarning, setTabWarning] = useState(null); // { count, remaining }
+  const warnTimerRef = useRef(null);
 
   // ── Termination state ──────────────────────────────────────────────────
   const [terminationVisible, setTerminationVisible] = useState(false);
-  const [terminationReason,  setTerminationReason]  = useState(null);
-  const [termSaving,         setTermSaving]         = useState(false);
+  const [terminationReason, setTerminationReason] = useState(null);
+  const [termSaving, setTermSaving] = useState(false);
   const terminatingRef = useRef(false);
 
   const answersRef = useRef({});
   useEffect(() => { answersRef.current = answers; }, [answers]);
 
-  // ── Load interview ─────────────────────────────────────────────────────
+  // Store the camera stream persistently
+  const streamRef = useRef(null);
+
+  // ── Load interview data ────────────────────────────────────────────────
   useEffect(() => {
-    if (!interviewId) { setError("No interview ID"); setLoadingPage(false); return; }
+    if (!interviewId) {
+      setError("No interview ID");
+      setLoadingPage(false);
+      return;
+    }
     api.getInterview(interviewId)
       .then((d) => {
         setInterview(d.interview);
@@ -58,7 +65,7 @@ export default function MCQInterview({ navigate, interviewId }) {
     warnTimerRef.current = setTimeout(() => setTabWarning(null), 4000);
   }, []);
 
-  // ── Proctoring violation ───────────────────────────────────────────────
+  // ── Proctoring violation handler ───────────────────────────────────────
   const handleProctoringViolation = useCallback(async (reason) => {
     if (terminatingRef.current) return;
     terminatingRef.current = true;
@@ -79,31 +86,70 @@ export default function MCQInterview({ navigate, interviewId }) {
     }
   }, [interviewId]);
 
+  // Only enable proctor when in "active" phase and video element exists
+  const proctorEnabled = phase === "active" && !terminatingRef.current;
+
   const {
-    videoRef, canvasRef, proctorState, snapshot: proctorSnapshot,
+    videoRef,
+    canvasRef,
+    proctorState,
+    snapshot: proctorSnapshot,
   } = useProctor({
-    enabled:            phase === "active",
-    permissionsGranted: permGranted,
-    onTerminate:        handleProctoringViolation,
+    enabled: proctorEnabled,
+    permissionsGranted: permGranted && phase === "active",
+    onTerminate: handleProctoringViolation,
     onTabSwitchWarning: handleTabSwitchWarning,
   });
+
+  // ── Re-attach stream when video element is mounted ─────────────────────
+  useEffect(() => {
+    if (!videoRef.current || !streamRef.current) return;
+
+    const video = videoRef.current;
+    const stream = streamRef.current;
+
+    console.log("[MCQ] Attaching persistent stream to video element");
+
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
+      video.play()
+        .then(() => console.log("[MCQ] Live video playback started successfully"))
+        .catch(err => console.error("[MCQ] Video play failed:", err.message));
+    }
+  }, [videoRef.current, phase]);
 
   // ── Timer ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (phase !== "active" || submitting || terminatingRef.current) return;
     const t = setInterval(() => {
-      setTimeLeft((p) => { if (p <= 1) { handleSubmit(); return 0; } return p - 1; });
+      setTimeLeft((p) => {
+        if (p <= 1) {
+          handleSubmit();
+          return 0;
+        }
+        return p - 1;
+      });
     }, 1000);
     return () => clearInterval(t);
   }, [phase, submitting]);
 
   // ── Permission granted callback ────────────────────────────────────────
-  const onPermissionsGranted = (stream) => {
-    // Stop the test stream — useProctor will re-request it for face detection
-    stream?.getTracks().forEach((t) => t.stop());
+  const onPermissionsGranted = useCallback((stream) => {
+    console.log("[MCQ] Camera permission granted → stream ready", stream?.getTracks().map(t => t.kind));
+
+    // IMPORTANT: Do NOT stop the tracks here!
+    streamRef.current = stream;
+
     setPermGranted(true);
     setPhase("ready");
-  };
+
+    // Early attempt to assign (may not work yet if video not mounted)
+    if (videoRef.current && stream) {
+      console.log("[MCQ] Early stream assignment in ready phase");
+      videoRef.current.srcObject = stream;
+      videoRef.current.play().catch(e => console.warn("[MCQ] Early play failed:", e));
+    }
+  }, [videoRef]);
 
   // ── Start interview ────────────────────────────────────────────────────
   const startInterview = async () => {
@@ -111,16 +157,18 @@ export default function MCQInterview({ navigate, interviewId }) {
       await api.startInterview(interviewId);
       setPhase("active");
       document.documentElement.requestFullscreen?.().catch(() => {});
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      setError(e.message);
+    }
   };
 
-  // ── Answer ────────────────────────────────────────────────────────────
+  // ── Answer handling ────────────────────────────────────────────────────
   const handleAnswer = (key) => {
     const qId = questions[current]._id;
     setAnswers((prev) => ({ ...prev, [qId]: key }));
   };
 
-  // ── Submit ────────────────────────────────────────────────────────────
+  // ── Submit answers ─────────────────────────────────────────────────────
   const handleSubmit = useCallback(async () => {
     if (submitting || terminatingRef.current) return;
     setSubmitting(true);
@@ -155,10 +203,9 @@ export default function MCQInterview({ navigate, interviewId }) {
     </div>
   );
 
-  const timerClass    = timeLeft < 300 ? "danger" : timeLeft < 600 ? "warning" : "";
-  const q             = questions[current];
-  const answeredCount = Object.keys(answers).length;
-  const tabsLeft      = TAB_SWITCH_LIMIT - (proctorState.tabSwitches || 0);
+  const timerClass = timeLeft < 300 ? "danger" : timeLeft < 600 ? "warning" : "";
+  const q = questions[current];
+  const tabsLeft = TAB_SWITCH_LIMIT - (proctorState.tabSwitches || 0);
 
   // ──────────────────────────────────────────────────────────────────────
   // PHASE: permissions

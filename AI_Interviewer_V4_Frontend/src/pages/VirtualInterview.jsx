@@ -15,40 +15,44 @@ function fmt(s) {
 export default function VirtualInterview({ navigate, interviewId }) {
 
   // ── App phase: permissions → ready → active ───────────────────────────
-  const [appPhase,    setAppPhase]   = useState("permissions");
+  const [appPhase, setAppPhase] = useState("permissions");
   const [permGranted, setPermGranted] = useState(false);
 
   // ── Interview data ────────────────────────────────────────────────────
-  const [interview,   setInterview]  = useState(null);
-  const [started,     setStarted]    = useState(false);
-  const [messages,    setMessages]   = useState([]);
+  const [interview, setInterview] = useState(null);
+  const [started, setStarted] = useState(false);
+  const [messages, setMessages] = useState([]);
   const [currentQIdx, setCurrentQIdx] = useState(0);
-  const [currentQ,    setCurrentQ]   = useState(null);
-  const [inputText,   setInputText]  = useState("");
-  const [chatPhase,   setChatPhase]  = useState("loading"); // loading|answering|evaluating|done
-  const [timeLeft,    setTimeLeft]   = useState(0);
+  const [currentQ, setCurrentQ] = useState(null);
+  const [inputText, setInputText] = useState("");
+  const [chatPhase, setChatPhase] = useState("loading");
+  const [timeLeft, setTimeLeft] = useState(0);
   const [loadingPage, setLoadingPage] = useState(true);
-  const [error,       setError]      = useState("");
+  const [error, setError] = useState("");
 
   // ── Termination ───────────────────────────────────────────────────────
   const [termVisible, setTermVisible] = useState(false);
-  const [termReason,  setTermReason]  = useState(null);
-  const [termSaving,  setTermSaving]  = useState(false);
+  const [termReason, setTermReason] = useState(null);
+  const [termSaving, setTermSaving] = useState(false);
   const terminatingRef = useRef(false);
 
   // ── Tab-switch warning toast ──────────────────────────────────────────
-  const [tabWarn,    setTabWarn]    = useState(null); // { count, remaining }
-  const warnTimer                   = useRef(null);
+  const [tabWarn, setTabWarn] = useState(null);
+  const warnTimer = useRef(null);
 
-  const chatRef     = useRef(null);
+  const chatRef = useRef(null);
   const textareaRef = useRef(null);
   const convHistRef = useRef([]);
+  const streamRef = useRef(null); // ← NEW: persist stream across phases
 
   // ── Load interview data ───────────────────────────────────────────────
   useEffect(() => {
     if (!interviewId) { setError("No interview ID"); setLoadingPage(false); return; }
     api.getInterview(interviewId)
-      .then((d) => { setInterview(d.interview); setTimeLeft((d.interview.durationMinutes || 60) * 60); })
+      .then((d) => { 
+        setInterview(d.interview); 
+        setTimeLeft((d.interview.durationMinutes || 60) * 60); 
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingPage(false));
   }, [interviewId]);
@@ -66,7 +70,6 @@ export default function VirtualInterview({ navigate, interviewId }) {
   }, [started, chatPhase]);
 
   // ── Voice input ───────────────────────────────────────────────────────
-  // onTranscript is stable via useCallback so useVoiceInput never gets stale closures
   const onTranscriptCb = useCallback((committed) => {
     setInputText(committed);
   }, []);
@@ -74,8 +77,6 @@ export default function VirtualInterview({ navigate, interviewId }) {
   const { supported: voiceSupported, recording: voiceRecording, interimText,
           startRecording, stopRecording } = useVoiceInput({ onTranscript: onTranscriptCb });
 
-  // inputRef lets handleVoiceToggle always see the latest inputText
-  // without needing it as a useCallback dep (avoids stale closure)
   const inputTextRef = useRef("");
   useEffect(() => { inputTextRef.current = inputText; }, [inputText]);
 
@@ -108,12 +109,32 @@ export default function VirtualInterview({ navigate, interviewId }) {
     finally { setTermSaving(false); }
   }, [interviewId]);
 
+  // Only enable proctor when we're in active phase (video element exists)
+  const proctorEnabled = started && !terminatingRef.current && appPhase === "active";
+
   const { videoRef, canvasRef, proctorState, snapshot: proctorSnapshot } = useProctor({
-    enabled:            started && !terminatingRef.current,
-    permissionsGranted: permGranted,
-    onTerminate:        handleViolation,
+    enabled: proctorEnabled,
+    permissionsGranted: permGranted && appPhase === "active",
+    onTerminate: handleViolation,
     onTabSwitchWarning: handleTabWarn,
   });
+
+  // ── Re-attach stream when videoRef becomes available ──────────────────
+  useEffect(() => {
+    if (!videoRef.current || !streamRef.current) return;
+
+    const video = videoRef.current;
+    const stream = streamRef.current;
+
+    console.log("[CAMERA-DEBUG] Attaching persisted stream to video element");
+
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
+      video.play()
+        .then(() => console.log("[CAMERA-DEBUG] Video playback started successfully"))
+        .catch((err) => console.error("[CAMERA-DEBUG] Video play failed:", err.message));
+    }
+  }, [videoRef.current, appPhase, started, permGranted]);
 
   // ── Chat helpers ──────────────────────────────────────────────────────
   const addMsg = useCallback((role, content) => {
@@ -134,11 +155,22 @@ export default function VirtualInterview({ navigate, interviewId }) {
   }, [interviewId, addMsg]);
 
   // ── Permission granted ────────────────────────────────────────────────
-  const onPermGranted = (stream) => {
-    stream?.getTracks().forEach((t) => t.stop());
+  const onPermGranted = useCallback((stream) => {
+    console.log("[CAMERA-DEBUG] Permission granted → stream acquired", stream?.getTracks().map(t => t.kind));
+
+    // IMPORTANT: Do NOT stop tracks here!
+    streamRef.current = stream;
+
     setPermGranted(true);
     setAppPhase("ready");
-  };
+
+    // Early assignment attempt (may work in ready phase if video is already mounted)
+    if (videoRef.current && stream) {
+      console.log("[CAMERA-DEBUG] Early stream assignment in ready phase");
+      videoRef.current.srcObject = stream;
+      videoRef.current.play().catch(e => console.warn("[CAMERA-DEBUG] Early play failed:", e));
+    }
+  }, [videoRef]);
 
   // ── Start (from ready screen) ─────────────────────────────────────────
   const startInterview = async () => {
@@ -158,7 +190,6 @@ export default function VirtualInterview({ navigate, interviewId }) {
   // ── Send answer ───────────────────────────────────────────────────────
   const handleSend = async () => {
     if (!inputText.trim() || chatPhase !== "answering" || terminatingRef.current) return;
-    // If mic is recording, stop it first and use that text
     if (voiceRecording) { stopRecording(); }
     const text = inputText.trim();
     setInputText("");
@@ -318,11 +349,9 @@ export default function VirtualInterview({ navigate, interviewId }) {
         <div className={`timer-display ${timerClass}`}><span>⏱</span>{fmt(timeLeft)}</div>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           <span style={{ fontSize:12, fontFamily:"var(--font-m)", color:"var(--text-2)" }}>{currentQIdx}/{interview?.questions?.length}</span>
-          {/* Tab counter */}
           <div style={{ display:"flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:20, background: tabsLeft <= 1 ? "var(--red-dim)" : tabsLeft === 2 ? "var(--amber-dim)" : "var(--bg-2)", border:`1px solid ${tabsLeft <= 1 ? "rgba(255,77,106,.3)" : tabsLeft === 2 ? "rgba(255,184,48,.3)" : "var(--border)"}` }}>
             <span style={{ fontSize:10, fontFamily:"var(--font-m)", fontWeight:700, color: tabsLeft <= 1 ? "var(--red)" : tabsLeft === 2 ? "var(--amber)" : "var(--text-2)" }}>⚠ {tabsLeft} tab{tabsLeft !== 1 ? "s" : ""} left</span>
           </div>
-          {/* Face chip */}
           <div style={{ display:"flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:20, background: proctorState.faceDetected ? "var(--green-dim)" : "var(--red-dim)", border:`1px solid ${proctorState.faceDetected ? "rgba(0,255,178,.2)" : "rgba(255,77,106,.2)"}`, transition:"all .3s" }}>
             <div style={{ width:6, height:6, borderRadius:"50%", background: proctorState.faceDetected ? "var(--green)" : "var(--red)", animation:"pulse 1.5s infinite" }} />
             <span style={{ fontSize:10, fontFamily:"var(--font-m)", fontWeight:700, color: proctorState.faceDetected ? "var(--green)" : "var(--red)" }}>
@@ -342,8 +371,6 @@ export default function VirtualInterview({ navigate, interviewId }) {
 
         {/* Chat column */}
         <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
-
-          {/* Messages */}
           <div ref={chatRef} className="chat-wrap" style={{ flex:1, overflowY:"auto" }}>
             {messages.map((msg, i) => (
               <div key={i} className={`chat-msg ${msg.role === "candidate" ? "candidate" : ""}`}>
@@ -370,7 +397,6 @@ export default function VirtualInterview({ navigate, interviewId }) {
           <div style={{ padding:"16px 24px", borderTop:"1px solid var(--border)", background:"rgba(9,13,26,.95)", flexShrink:0 }}>
             {error && <div className="alert alert-error" style={{ marginBottom:8, padding:"8px 12px", fontSize:12 }}><span>⚠</span>{error}</div>}
 
-            {/* Interim transcript preview */}
             {voiceRecording && interimText && (
               <div style={{ marginBottom:8, padding:"7px 12px", background:"rgba(0,229,255,.05)", border:"1px solid rgba(0,229,255,.18)", borderRadius:"var(--radius-sm)", display:"flex", gap:8, alignItems:"flex-start" }}>
                 <div style={{ width:6, height:6, borderRadius:"50%", background:"var(--red)", animation:"pulse .8s infinite", flexShrink:0, marginTop:5 }} />
@@ -402,7 +428,6 @@ export default function VirtualInterview({ navigate, interviewId }) {
               />
 
               <div style={{ position:"absolute", bottom:10, right:10, display:"flex", gap:6, alignItems:"center" }}>
-                {/* 🎙️ Voice button */}
                 {voiceSupported && (
                   <button
                     onClick={handleVoiceToggle}
@@ -451,11 +476,12 @@ export default function VirtualInterview({ navigate, interviewId }) {
           </div>
         </div>
 
-        {/* Right sidebar */}
+        {/* Right sidebar with live camera */}
         <div style={{ width:234, borderLeft:"1px solid var(--border)", background:"rgba(9,13,26,.85)", display:"flex", flexDirection:"column", overflowY:"auto" }}>
           <div style={{ padding:16, borderBottom:"1px solid var(--border)" }}>
             <CameraMonitor videoRef={videoRef} canvasRef={canvasRef} proctorState={proctorState} />
           </div>
+          {/* Progress and tips sections remain unchanged */}
           <div style={{ padding:16, borderBottom:"1px solid var(--border)" }}>
             <div style={{ fontSize:10, fontFamily:"var(--font-m)", color:"var(--text-2)", textTransform:"uppercase", letterSpacing:".08em", marginBottom:10 }}>Progress</div>
             {(interview?.questions || []).map((q, i) => (

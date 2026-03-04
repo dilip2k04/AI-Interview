@@ -202,19 +202,20 @@ Respond ONLY with valid JSON array:
     ───────────────────────────────────── */
 
     sendEmail(
-  {
-    email: candidate.email,
-    name: candidate.name
-  },
+  candidate._id,
   jobRole,
   jobDescription,
-  req.user.company,
+  req.user.company || "AI Interviewer",
   mode,
   durationMinutes,
   expiresAt,
   interviewLink
-).catch(err => {
-  console.log("Interview email failed:", err);
+)
+.then(() => {
+  console.log("📧 Interview email sent successfully");
+})
+.catch(err => {
+  console.log("❌ Interview email failed:", err);
 });
 
     /* ─────────────────────────────────────

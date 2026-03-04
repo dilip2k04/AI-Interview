@@ -1,7 +1,7 @@
 import BASE_URL from "../config";
 
 // const BASE = BASE_URL;
-const BASE = "https://ai-interview-l6am.onrender.com/api";
+const BASE = "http://localhost:5000/api";
 
 console.log("Backend URL : " + BASE);
 
